@@ -1,0 +1,55 @@
+version: '3'
+
+schema:
+  version: '3.8'
+  
+tasks:
+  setup:databases:
+    desc: Sets up all databases (PostgreSQL, MSSQL, SQLite)
+    cmds:
+      - docker compose up -d --remove-orphans mssql-db postgres-db sqlite-db
+      - sleep 2
+      - task: setup:postgres
+      - task: setup:mssql
+      - task: setup:sqlite
+
+  clear:databases:
+    desc: Clears all databases (PostgreSQL, MSSQL, SQLite)
+    cmds:
+      - task: clear:postgres
+      - task: clear:mssql
+      - task: clear:sqlite
+      - docker compose down --remove-orphans
+
+  setup:postgres:
+    desc: Sets up PostgreSQL database using Docker container
+    cmds:
+      - docker compose exec -i postgres-db psql -U lab01_user -d lab01_db -f /psql_init/pg_north_ddl_data.sql
+
+  setup:mssql:
+    desc: Sets up MSSQL database using Docker container
+    cmds:
+      - docker compose run --rm mssql-tools /opt/mssql-tools/bin/sqlcmd -S mssql-db -U sa -P lab_01_password -Q "IF NOT EXISTS (SELECT * FROM sys.databases WHERE name = 'lab01') CREATE DATABASE lab01_db;"
+      - docker compose run --rm mssql-tools /opt/mssql-tools/bin/sqlcmd -S mssql-db -U sa -P lab_01_password -d lab01_db -i /mssql_init/ms_north_ddl.sql
+      - docker compose run --rm mssql-tools /opt/mssql-tools/bin/sqlcmd -S mssql-db -U sa -P lab_01_password -d lab01_db -i /mssql_init/ms_north_data.sql
+
+  setup:sqlite:
+    desc: Sets up SQLite database using Docker container
+    cmds:
+      - docker compose exec -i sqlite-db sqlite3 /data/lab01.db ".read /sqlite_init/sqlite_north_ddl.sql"
+      - docker compose exec -i sqlite-db sqlite3 /data/lab01.db ".read /sqlite_init/sqlite_north_data.sql"
+
+  clear:postgres:
+    desc: Drops all tables in PostgreSQL database using Docker container
+    cmds:
+      - docker compose exec -i postgres-db psql -U lab01_user -d lab01_db -c "DROP SCHEMA public CASCADE; CREATE SCHEMA public;"
+
+  clear:mssql:
+    desc: Drops MSSQL database using Docker container
+    cmds:
+      - docker compose run --rm mssql-tools /opt/mssql-tools/bin/sqlcmd -S mssql-db -U sa -P lab_01_password -Q "DROP DATABASE IF EXISTS lab01_db;"
+
+  clear:sqlite:
+    desc: Clears SQLite database using Docker container
+    cmds:
+      - docker compose exec sqlite-db rm -f /data/lab01.db

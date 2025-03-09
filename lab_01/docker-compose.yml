@@ -1,0 +1,43 @@
+version: '3.8'
+
+services:
+  mssql-db:
+    image: mcr.microsoft.com/azure-sql-edge:latest
+    platform: linux/arm64
+    environment:
+      - ACCEPT_EULA=Y
+      - MSSQL_SA_PASSWORD=lab_01_password
+    ports:
+      - "1433:1433"
+    volumes:
+      - mssql_data:/var/opt/mssql
+
+  mssql-tools:
+    image: mcr.microsoft.com/mssql-tools
+    volumes:
+      - ./Northwind_mssql:/mssql_init
+    depends_on:
+      - mssql-db
+
+  postgres-db:
+    image: postgres:16-alpine
+    environment:
+      - POSTGRES_PASSWORD=lab01_password
+      - POSTGRES_USER=lab01_user
+      - POSTGRES_DB=lab01_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./Northwind_psql:/psql_init
+
+  sqlite-db:
+    image: keinos/sqlite3:latest
+    volumes:
+      - ./sqlite_data:/data
+      - ./Northwind_sqlite:/sqlite_init
+    command: [ "sh", "-c", "sqlite3 /data/lab01.db '.databases' && tail -f /dev/null" ]
+
+volumes:
+  mssql_data:
+  postgres_data:

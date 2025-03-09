@@ -1,0 +1,12 @@
+        WITH avg_prices AS (SELECT p.productid,
+        p.productname,
+        p.unitprice,
+        AVG(p.unitprice) OVER (PARTITION BY p.categoryid) AS avg_price
+ FROM products p)
+SELECT productid,
+productname,
+unitprice,
+avg_price
+FROM avg_prices
+WHERE unitprice > avg_price
+ORDER BY 1;

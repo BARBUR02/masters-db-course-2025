@@ -1,0 +1,40 @@
+version: '3'
+
+schema:
+  version: '3.8'
+  
+tasks:
+  setup:databases:
+    desc: Sets up all databases from backups (PostgreSQL, MSSQL, SQLite)
+    cmds:
+      - docker compose up -d --remove-orphans mssql-db postgres-db sqlite-db
+      - sleep 2
+      - task: setup:postgres
+      - task: setup:mssql
+
+  clear:databases:
+    desc: Clears all databases (PostgreSQL, MSSQL, SQLite)
+    cmds:
+      - task: clear:postgres
+      - task: clear:mssql
+      - docker compose down --remove-orphans
+
+  setup:postgres:
+    desc: Restores PostgreSQL database from backup
+    cmds:
+      - docker compose exec -i postgres-db psql -U lab02_user -d lab02_db -f /psql_init/northwind3.sql
+
+  setup:mssql:
+    desc: Restores MSSQL database from backup
+    cmds:
+      - docker compose run --rm mssql-tools /opt/mssql-tools/bin/sqlcmd -S mssql-db -U sa -P lab_02_password -Q "RESTORE DATABASE lab02_db FROM DISK = '/mssql_init/northwind3.bak' WITH MOVE 'Northwind' TO '/var/opt/mssql/data/northwind.mdf', MOVE 'Northwind_log' TO '/var/opt/mssql/data/northwind_log.ldf'"
+
+  clear:postgres:
+    desc: Drops all tables in PostgreSQL database using Docker container
+    cmds:
+      - docker compose exec -i postgres-db psql -U lab02_user -d lab02_db -c "DROP SCHEMA public CASCADE; CREATE SCHEMA public;"
+
+  clear:mssql:
+    desc: Drops MSSQL database using Docker container
+    cmds:
+      - docker compose run --rm mssql-tools /opt/mssql-tools/bin/sqlcmd -S mssql-db -U sa -P lab_02_password -Q "DROP DATABASE IF EXISTS lab02_db;"

@@ -65,3 +65,4 @@ venv.bak/
 # Other
 *.swp
 *~
+lab_02/Northwind_psql/northwind3.sql

@@ -41,7 +41,7 @@ jspm_packages/
 *.bak
 *.backup
 
-# IDE specific
+# IDE specific  
 .idea/
 .vscode/
 *.sublime-project

@@ -751,8 +751,28 @@ Zbiór wynikowy powinien zawierać:
 > Wyniki: 
 
 ```sql
---  ...
+WITH order_values AS (SELECT o.orderid,
+                             o.customerid,
+                             o.orderdate,
+                             c.companyname,
+                             SUM(od.unitprice * od.quantity * (1 - od.discount)) + o.freight AS total_value
+                      FROM orders o
+                               JOIN customers c ON o.customerid = c.customerid
+                               JOIN orderdetails od ON o.orderid = od.orderid
+                      GROUP BY o.orderid, o.customerid, o.orderdate, o.freight, c.companyname),
+     with_lag AS (SELECT companyname,
+                         orderid,
+                         orderdate,
+                         total_value,
+                         LAG(orderid) OVER (PARTITION BY customerid ORDER BY orderdate)     AS previous_orderid,
+                         LAG(orderdate) OVER (PARTITION BY customerid ORDER BY orderdate)   AS previous_orderdate,
+                         LAG(total_value) over (partition by customerid order by orderdate) as last_order_total_price
+                  FROM order_values)
+SELECT *
+FROM with_lag
+ORDER BY companyname, orderdate;
 ```
+Funkcje okna w znaczący sposób ułatwiają analizę raportowania tego typu zbiorów danych.
 
 ---
 
@@ -778,8 +798,29 @@ order by categoryid, unitprice desc;
 ---
 > Wyniki: 
 
+Funkcja `first_value()` zwraca konkretną wartość kolumny dla pierwszego wiersza
+danej partycji, a funkcja `last_value()` zwraca analogicznie konkretną wartość dla
+ostatniego wiersza danej partycji.
+
+W przypadku naszego zapytania mozemy zaobserwować, ze kolumna first value zwraca dla kazdej kategorii,
+w kazdym przypadku poprawną wartość czyli najdrozszy produkt. Wynika to z faktu, ze powyzsze okna przy zastosowaniu
+formuły (`order by`) dzialaja na konkretnym oknie a nie calej partycji. Jako ze domyslna wartosc dla zakresu ramki okna 
+wynosi `RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW`, to okno kończy się na konkretnym wierszu. Przy zastosowaniu
+sortowania w sposób malejący, potencjalnie kazdy kolejny wiersz będzie mniejszy od poprzedniego i przez to stanie 
+się najmniejszą wartością w oknie, co powoduje ze uzycie funkcji `last_value()` jest niepoprawne.
+
+W celu naprawienia tego zachowania mamy dwa najprostsze rozwiazania:
+- zmienić kierunek sortowania dla obliczania `last_value` (ASC) oraz uzyc `first_value` w jej miejsce
+- zdefiniować jawnie ramkę przy pomocy: `RANGE BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING`
+
 ```sql
---  ...
+select productid, productname, unitprice, categoryid,
+    first_value(productname) over (partition by categoryid
+order by unitprice desc) first,
+    last_value(productname) over (partition by categoryid
+order by unitprice desc ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) last
+from products
+order by categoryid, unitprice desc;
 ```
 
 ---
@@ -791,9 +832,50 @@ Spróbuj uzyskać ten sam wynik bez użycia funkcji okna, porównaj wyniki, czas
 ---
 > Wyniki: 
 
+Zapytanie symulujące wcześniejsze zapytanie. Juz na pierwszy rzut oka widać potencjalnie kosztowne podzapytania.
 ```sql
---  ...
+SELECT p.productid,
+       p.productname,
+       p.unitprice,
+       p.categoryid,
+       (SELECT p2.productname
+        FROM products p2
+        WHERE p2.categoryid = p.categoryid
+        ORDER BY p2.unitprice DESC
+        LIMIT 1) AS first,
+       (SELECT p3.productname
+        FROM products p3
+        WHERE p3.categoryid = p.categoryid
+          AND p3.unitprice >= p.unitprice
+        ORDER BY p3.unitprice ASC
+        LIMIT 1) AS last
+
+FROM products p
+ORDER BY categoryid, unitprice DESC;
 ```
+
+#### PSQL
+**Query plan z zastosowaniem funkcji okna**
+![Window function](images/zad_7_psql_window.png)
+**Query plan bez zastosowania funkcji okna**
+![No Window function](images/zad_7_custom_psql.png)
+
+#### MSSQL
+**Query plan z zastosowaniem funkcji okna**
+![Window function](images/zad_7_mssql_window.png)
+**Query plan bez zastosowania funkcji okna**
+![No Window function](images/zad_7_mssql_custom.png)
+
+#### SQLITE
+**Query plan z zastosowaniem funkcji okna**
+![Window function](images/zad_7_sqlite_window.png)
+**Query plan bez zastosowania funkcji okna**
+![No Window function](images/zad_7_sqlite_custom.png)
+
+
+### Podsumowanie
+Widzimy ze w kazdym przypadku plany są znacznie bardziej skomplikowane dla customowego rozwiązanie,
+oczekiwaiśmy tego wyniku w związku z duą ilością podzapytań więc nie jest to dla nas zaskoczeniem.
 
 ---
 
@@ -822,8 +904,43 @@ Zbiór wynikowy powinien zawierać:
 > Wyniki: 
 
 ```sql
---  ...
+WITH order_values AS (SELECT o.orderid,
+                             o.customerid,
+                             o.orderdate,
+                             c.companyname,
+                             SUM(od.unitprice * od.quantity * (1 - od.discount)) + o.freight AS total_value
+                      FROM orders o
+                               JOIN customers c ON o.customerid = c.customerid
+                               JOIN orderdetails od ON o.orderid = od.orderid
+                      GROUP BY o.orderid, o.customerid, o.orderdate, c.companyname, o.freight),
+     with_lag AS (SELECT customerid,
+                         companyname,
+                         orderid,
+                         orderdate,
+                         total_value,
+                         FIRST_VALUE(orderid) OVER month_year_window          AS cheapest_order_id_in_month,
+                         FIRST_VALUE(total_value) OVER month_year_window      AS cheapest_order_amount_in_month,
+                         FIRST_VALUE(orderdate) OVER month_year_window        AS cheapest_order_date_in_month,
+                         FIRST_VALUE(orderid) OVER month_year_window_desc     AS most_expensive_order_id_in_month,
+                         FIRST_VALUE(total_value) OVER month_year_window_desc AS most_expensive_order_amount_in_month,
+                         FIRST_VALUE(orderdate) OVER month_year_window_desc   AS most_expensive_order_date_in_month
+                  FROM order_values
+                  WINDOW month_year_window AS (
+                          PARTITION BY customerid, EXTRACT(YEAR FROM orderdate), EXTRACT(MONTH FROM orderdate)
+                          ORDER BY total_value
+                          ),
+                         month_year_window_desc AS (
+                                 PARTITION BY customerid, EXTRACT(YEAR FROM orderdate), EXTRACT(MONTH FROM orderdate)
+                                 ORDER BY total_value DESC
+                                 ))
+SELECT *
+FROM with_lag
+ORDER BY companyname, orderdate;
 ```
+
+W roziwązaniu w celu uniknięcia powtarzania definicji okien, uzywłem składni `WINDOW`. Jak widać, dzięki
+funkcjom okna, pisanie tego typu raportów jest bardzo przyjemne i czytelne. Stworzenie takiego raportu bez nich w znaczący sposób
+skomplikowałoby zadanie nie tylko pod względem logidznym ale i wydajnościowym.
 
 ---
 

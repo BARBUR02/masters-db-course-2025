@@ -961,8 +961,23 @@ Zbiór wynikowy powinien zawierać:
 W przypadku długiego czasu wykonania ogranicz zbiór wynikowy do kilkuset/kilku tysięcy wierszy
 
 ```sql
--- wyniki ...
+select id,
+       productid,
+       date,
+       SUM(unitprice * quantity) OVER daily_sales                as daily_sales,
+       SUM(unitprice * quantity) OVER accumulative_monthly_sales as accumulative_monthly_sales
+from product_history
+WINDOW daily_sales AS (
+        PARTITION BY productid,date
+        ),
+       accumulative_monthly_sales AS (
+               PARTITION BY productid, EXTRACT(YEAR FROM date), EXTRACT(MONTH FROM date)
+               ORDER BY date
+               )
+ORDER BY productid, date
 ```
+
+W przypadku funkcji okna, na Postgresie zapytanie wykonywało się 3s 322ms. Funkcję okna ponownie okazały się bardzo pomocne i dzięki nim w sposób schludny jesteśmy w stanie zaimplementować to zapytanie.
 
 Spróbuj wykonać zadanie bez użycia funkcji okna. Spróbuj uzyskać ten sam wynik bez użycia funkcji okna, porównaj wyniki, czasy i plany zapytań. Przetestuj działanie w różnych SZBD (MS SQL Server, PostgreSql, SQLite)
 
@@ -970,22 +985,96 @@ Spróbuj wykonać zadanie bez użycia funkcji okna. Spróbuj uzyskać ten sam wy
 > Wyniki: 
 
 ```sql
---  ...
+SELECT ph1.id,
+       ph1.productid,
+       ph1.date,
+       (SELECT SUM(ph2.unitprice * ph2.quantity)
+        FROM product_history ph2
+        WHERE ph2.productid = ph1.productid
+          AND ph2.date = ph1.date) AS daily_sales,
+
+       (SELECT SUM(ph3.unitprice * ph3.quantity)
+        FROM product_history ph3
+        WHERE ph3.productid = ph1.productid
+          AND EXTRACT(YEAR FROM ph3.date) = EXTRACT(YEAR FROM ph1.date)
+          AND EXTRACT(MONTH FROM ph3.date) = EXTRACT(MONTH FROM ph1.date)
+          AND ph3.date <= ph1.date) AS accumulative_monthly_sales
+
+FROM product_history ph1
+ORDER BY ph1.productid, ph1.date;
 ```
 
+Co ciekawe, podejście bez uycia funkcji okna w przypadku Posgresa działa szybciej niz podejście z funkcjami okna - 1s 850ms dla defaultowych ustawień w DataGripie (500 pierwszych rekordow), po zmianie na all widzę diametralną róznicę - window function zajmuje okolo 20sekund, a podejscie customowe liczy na pewno wiecej niz 2 minuty. Jezli chodzi o bazy SQLITE oraz MSSQL, to juz dla pierwszych 500 rekordow widać znaczące róznice w czasach wykonania na korzyść funkcji okna.
+Porównajmy więc plany zapytań dla rónych silników bazodanowych:
+
+#### PSQL
+**Query plan z zastosowaniem funkcji okna**
+![Window function](images/zad_9_psql_window.png)
+**Query plan bez zastosowania funkcji okna**
+![Custom function](images/zad_9_psql_non-window.png)
+
+#### MSSQL
+**Query plan z zastosowaniem funkcji okna**
+![Window function](images/zad_9_mssql_window.png)
+**Query plan bez zastosowania funkcji okna**
+![Custom function](images/zad_9_mssql_non_window.png)
+
+#### SQLITE
+**Query plan z zastosowaniem funkcji okna**
+![Window function](images/zad_9_sqlite_window.png)
+**Query plan bez zastosowania funkcji okna**
+![Custom function](images/zad_9_sqlite_non_window.png)
+
+### **Podsumowanie**
+Index scan w dwóch miejscach w planie zapytania Postgresowym  tłumaczy dlaczego dla mniejszej ilosci rekordow to zapytanie outperformowało podejście uywające funkcji okna. Dla pozostałych silników to właśnie funkcja okna była lepsza w kazdym przypadku. Plany czesto korzystaja z indeksow bazodanowych, ale jednak w przypadku customowego podejścia dla większej ilości rekordów zapytania zajmują znacznie za duzo czasu. 
 ---
 
 
 # Zadanie 10
 
-Wykonaj kilka "własnych" przykładowych analiz. Czy są jeszcze jakieś ciekawe/przydatne funkcje okna (z których nie korzystałeś w ćwiczeniu)? Spróbuj ich użyć w zaprezentowanych przykładach.
+Wykonaj kilka "własnych" przykładowych analiz. Czy są jeszcze jakieś ciekawe/przydatne funkcje okna (z których nie korzystałeś w ćwiczeniu)? Spróbuj ich użyć w zaprezentowanych przykładach. 
 
 ---
+
+#### Wartość sprzedaży każdego produktu miesięcznie, a następnie dla każdego produktu w obrębie miesiąca oblicza jego percent_rank i cume_dist na podstawie sprzedaży w danym miesiącu - PERCENT_RANK, CUME_DIST
+
 > Wyniki: 
 
 ```sql
---  ...
+SELECT productid,
+       EXTRACT(YEAR FROM date)                      AS year,
+       EXTRACT(MONTH FROM date)                     AS month,
+       SUM(unitprice * quantity)                    AS total_sales,
+       PERCENT_RANK() OVER (PARTITION BY EXTRACT(YEAR FROM date), EXTRACT(MONTH FROM date)
+           ORDER BY SUM(unitprice * quantity) DESC) AS percent_rank,
+       CUME_DIST() OVER (PARTITION BY EXTRACT(YEAR FROM date), EXTRACT(MONTH FROM date)
+           ORDER BY SUM(unitprice * quantity) DESC) AS cume_dist
+FROM product_history
+GROUP BY productid, EXTRACT(YEAR FROM date), EXTRACT(MONTH FROM date)
+ORDER BY year, month, percent_rank DESC;
 ```
+![10.1](images/10_1.png)
+
+#### Wartość sprzedaży każdego produktu miesięcznie oraz sumuje sprzedaż w 3-miesięcznym oknie (bieżący miesiąc, miesiąc poprzedni i miesiąc następny) dla każdego produktu - ROWS BETWEEN 
+```sql
+WITH sales_data AS (SELECT productid,
+                           EXTRACT(YEAR FROM date)   AS year,
+                           EXTRACT(MONTH FROM date)  AS month,
+                           SUM(unitprice * quantity) AS total_sales
+                    FROM product_history
+                    GROUP BY productid, year, month)
+SELECT productid,
+       year,
+       month,
+       total_sales,
+       SUM(total_sales)
+       OVER (PARTITION BY productid
+           ORDER BY year, month
+           ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING) AS rolling_3_month_sales
+FROM sales_data
+ORDER BY productid, year, month;
+```
+![10.2](images/10_2.png)
 
 ---
 Punktacja
